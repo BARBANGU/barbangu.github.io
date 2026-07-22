@@ -1441,6 +1441,38 @@ function relMovimentoBar(bar,jogoId){
     ${linhas}
     <tr><td><b>TOTAL</b></td><td><b>${NUM(tRec)}</b></td><td></td><td><b>${NUM(tV)}</b></td><td><b>${BRL(tR)}</b></td><td></td><td></td><td></td></tr></table>`);
 }
+function relGeral(){
+  const s=statsJogo(null);
+  const js=[...db.jogos].sort((a,b)=>(a.data||'').localeCompare(b.data||''));
+  const pubTotal=js.reduce((x,j)=>x+(+j.publicoPrev.social||0)+(+j.publicoPrev.bangu||0)+(+j.publicoPrev.visitante||0),0);
+  const porCamp={};js.forEach(j=>{const sj=statsJogo(j.id);const c=j.campeonato||'—';porCamp[c]=porCamp[c]||{receita:0,liq:0,jogos:0};porCamp[c].receita+=sj.receita;porCamp[c].liq+=sj.lucroLiquido;porCamp[c].jogos++});
+  const topProd=Object.entries(s.porProduto).sort((a,b)=>b[1].valor-a[1].valor);
+  const estoqueValor=db.produtos.reduce((x,p)=>x+p.custo*p.estoqueCentral,0);
+  imprimir('RELATÓRIO GERAL DA OPERAÇÃO',`
+    <p style="font-size:9pt">${js.length} jogo(s) cadastrado(s) · público previsto acumulado: ${NUM(pubTotal)}</p>
+    <p style="font-size:10pt;margin-top:6px"><b>1. Resumo financeiro</b></p>
+    <table><tr><th>Indicador</th><th>Valor</th></tr>
+    <tr><td>Receita total</td><td>${BRL(s.receita)}</td></tr>
+    <tr><td>Custo da mercadoria (CMV)</td><td>${BRL(s.custo)} (${PCT(s.cmv)})</td></tr>
+    <tr><td>Lucro bruto</td><td>${BRL(s.lucro)} (margem ${PCT(s.margem)})</td></tr>
+    <tr><td>Perdas e danos</td><td>${BRL(s.perdas)}</td></tr>
+    <tr><td>Despesas operacionais</td><td>${BRL(s.despesas)}</td></tr>
+    <tr><td><b>Lucro líquido</b></td><td><b>${BRL(s.lucroLiquido)}</b></td></tr>
+    <tr><td>Ticket médio</td><td>${BRL(s.ticket)} (${NUM(s.vendas.length)} vendas · ${NUM(s.itens)} itens)</td></tr>
+    <tr><td>Consumo por torcedor</td><td>${pubTotal?BRL(s.receita/pubTotal):'—'}</td></tr>
+    <tr><td>PIX / Cartão / Dinheiro</td><td>${BRL(s.porPgto.pix)} · ${BRL(s.porPgto.cartao)} · ${BRL(s.porPgto.dinheiro)}</td></tr>
+    <tr><td>Receita por bar (Social · Bangu · Visitante)</td><td>${BRL(s.porBar.social)} · ${BRL(s.porBar.bangu)} · ${BRL(s.porBar.visitante)}</td></tr>
+    <tr><td>Valor do estoque central hoje (a custo)</td><td>${BRL(estoqueValor)}</td></tr></table>
+    <p style="font-size:10pt;margin-top:8px"><b>2. Jogo a jogo</b></p>
+    <table><tr><th>Data</th><th>Adversário</th><th>Campeonato</th><th>Receita</th><th>Despesas</th><th>Líquido</th><th>Ticket</th></tr>
+    ${js.map(j=>{const sj=statsJogo(j.id);return `<tr><td>${dBR(j.data)}</td><td>${esc(j.adversario)}</td><td>${esc(j.campeonato)}</td><td>${BRL(sj.receita)}</td><td>${BRL(sj.despesas)}</td><td>${BRL(sj.lucroLiquido)}</td><td>${BRL(sj.ticket)}</td></tr>`}).join('')||'<tr><td colspan="7">Nenhum jogo</td></tr>'}</table>
+    <p style="font-size:10pt;margin-top:8px"><b>3. Por campeonato</b></p>
+    <table><tr><th>Campeonato</th><th>Jogos</th><th>Receita</th><th>Líquido</th></tr>
+    ${Object.entries(porCamp).map(([c,d])=>`<tr><td>${esc(c)}</td><td>${d.jogos}</td><td>${BRL(d.receita)}</td><td>${BRL(d.liq)}</td></tr>`).join('')||'<tr><td colspan="4">—</td></tr>'}</table>
+    <p style="font-size:10pt;margin-top:8px"><b>4. Produtos (toda a história)</b></p>
+    <table><tr><th>Produto</th><th>Qtd vendida</th><th>Receita</th></tr>
+    ${topProd.map(([pid,d])=>`<tr><td>${esc(prod(pid)?.nome||'?')}</td><td>${NUM(d.qtd)}</td><td>${BRL(d.valor)}</td></tr>`).join('')||'<tr><td colspan="3">Sem vendas</td></tr>'}</table>`);
+}
 function relHistoricoJogos(){
   const js=[...db.jogos].sort((a,b)=>(a.data||'').localeCompare(b.data||''));
   imprimir('HISTÓRICO DE JOGOS',`
@@ -1453,6 +1485,7 @@ TELAS.relatorios={titulo:'Relatórios',
   render(){
     const jogos=[...db.jogos].sort((a,b)=>(b.data||'').localeCompare(a.data||''));
     const R=[
+      ['📕','Relatório geral','Consolidado de toda a operação: financeiro, jogos, campeonatos e produtos','relGeral()'],
       ['📦','Inventário de estoque','Posição atual do estoque central com valorização','relInventario()'],
       ['🏟️','Histórico de jogos','Receita, lucro e ticket de todas as partidas','relHistoricoJogos()'],
     ];
