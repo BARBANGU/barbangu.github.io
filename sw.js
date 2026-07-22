@@ -1,5 +1,5 @@
 /* Bangu 2030 — service worker: cache-first para funcionar offline */
-const CACHE = 'bangu2030-v1';
+const CACHE = 'bangu2030-v2';
 const ARQUIVOS = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {

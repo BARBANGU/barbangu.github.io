@@ -330,7 +330,7 @@ function novoBanco(){
       p('TOR01','Torresmo','Torresmo',4.0,12,25,80,'porção'),
       p('BOL01','Bolo (consignado)','Bolo (consignado)',3.0,7,20,60,'fatia'),
     ],
-    compras:[], jogos:[], romaneios:[], reposicoes:[], vendas:[], caixas:[], devolucoes:[], ajustes:[],
+    compras:[], jogos:[], romaneios:[], reposicoes:[], vendas:[], caixas:[], devolucoes:[], ajustes:[], transferencias:[],
     auditoria:[{id:uid(),quando:t,quem:'sistema',acao:'instalação',detalhe:'Banco de dados criado com dados iniciais'}],
     excluidos:[],
   };
@@ -343,6 +343,7 @@ function carregar(){
   const raw=store.get(DB_KEY);
   if(raw){try{db=JSON.parse(raw)}catch(e){db=null}}
   if(!db)db=novoBanco();
+  if(!db.transferencias)db.transferencias=[]; /* migração v1.1 */
 }
 let saveT=null;
 function salvar(){
@@ -362,6 +363,10 @@ function estoqueBar(bar,jogoId){
   db.reposicoes.filter(r=>r.bar===bar&&(!jogoId||r.jogoId===jogoId)&&r.status==='entregue').forEach(r=>r.itens.forEach(i=>add(i.produtoId,-0+ +i.qtd||0)));
   db.vendas.filter(v=>v.bar===bar&&(!jogoId||v.jogoId===jogoId)).forEach(v=>v.itens.forEach(i=>add(i.produtoId,-i.qtd)));
   db.devolucoes.filter(d=>d.bar===bar&&(!jogoId||d.jogoId===jogoId)).forEach(d=>d.itens.forEach(i=>add(i.produtoId,-((+i.qtdDevolvida||0)+(+i.qtdPerdida||0)+(+i.qtdDanificada||0)))));
+  (db.transferencias||[]).filter(t=>!jogoId||t.jogoId===jogoId).forEach(t=>{
+    if(t.de===bar)t.itens.forEach(i=>add(i.produtoId,-i.qtd));
+    if(t.para===bar)t.itens.forEach(i=>add(i.produtoId,+i.qtd));
+  });
   return e;
 }
 function jogoAtivo(){return db.jogos.find(j=>j.status==='em_andamento')||null}
@@ -471,6 +476,7 @@ function menuDe(u){
     {r:'jogos',ic:'🏟️',nome:'Jogos',perfis:['admin','almox','coord']},
     {r:'romaneio',ic:'🚚',nome:'Romaneio',perfis:['admin','almox','coord']},
     {r:'reposicao',ic:'🔄',nome:'Reposição',perfis:['admin','almox','coord']},
+    {r:'transfer',ic:'🔁',nome:'Transferência',perfis:['admin','almox','coord']},
     {r:'devolucao',ic:'↩️',nome:'Devolução',perfis:['admin','almox','coord']},
     {r:'relatorios',ic:'📄',nome:'Relatórios',perfis:['admin','coord']},
     {r:'indicadores',ic:'📈',nome:'Indicadores',perfis:['admin','coord']},
@@ -482,11 +488,17 @@ function menuDe(u){
 }
 /* itens da barra inferior (máx 5) */
 function bottomDe(u){
-  const m=menuDe(u);const pri={admin:['dashboard','pdv','estoque','relatorios','config'],
-    almox:['estoque','compras','romaneio','reposicao','config'],
-    coord:['dashboard','pdv','reposicao','caixa','config'],
+  const m=menuDe(u);const pri={admin:['dashboard','pdv','estoque','relatorios'],
+    almox:['estoque','romaneio','transfer','reposicao'],
+    coord:['dashboard','pdv','reposicao','transfer'],
     caixa:['pdv','caixa','config']}[u.perfil];
   return pri.map(r=>m.find(x=>x.r===r)).filter(Boolean);
+}
+function abrirMenuMais(){
+  abrirModal('Menu completo',`<div class="user-grid" style="margin:10px 0">
+    ${menuDe(sessao).map(m=>`<button class="user-card" onclick="fecharModal();navegar('${m.r}')">
+      <div style="font-size:1.6rem;margin-bottom:6px">${m.ic}</div><b>${m.nome}</b></button>`).join('')}
+  </div>`);
 }
 
 function montarShell(){
@@ -495,7 +507,8 @@ function montarShell(){
     <div class="brand"><div class="brand-badge">B</div><div><b>Bangu 2030</b><span>Gestão de Bares</span></div></div>
     <div class="nav-list">${menuDe(u).map(m=>`<button class="nav-item" data-r="${m.r}" onclick="navegar('${m.r}')"><span class="ic">${m.ic}</span>${m.nome}</button>`).join('')}</div>
     <div class="sidebar-foot"><b>${esc(u.nome)}</b> · ${PERFIS[u.perfil].nome}<br><button class="link-btn" style="padding:6px 0" onclick="sair()">⎋ Sair</button></div>`;
-  $('#bottombar').innerHTML=bottomDe(u).map(m=>`<button data-r="${m.r}" onclick="navegar('${m.r}')"><span class="ic">${m.ic}</span>${m.nome}</button>`).join('');
+  $('#bottombar').innerHTML=bottomDe(u).map(m=>`<button data-r="${m.r}" onclick="navegar('${m.r}')"><span class="ic">${m.ic}</span>${m.nome}</button>`).join('')
+    +`<button onclick="abrirMenuMais()"><span class="ic">☰</span>Menu</button>`;
 }
 
 function renderTopbar(titulo){
@@ -1576,6 +1589,91 @@ function importarBackup(inp){
 }
 
 /* =====================================================
+   TELA · TRANSFERÊNCIA ENTRE BARES
+   ===================================================== */
+TELAS.transfer={titulo:'Transferência entre bares',
+  render(){
+    const j=jogoAtivo();
+    if(!j)return `<div class="card"><div class="empty"><span class="ic">🔁</span>As transferências acontecem durante o jogo.<br>Inicie uma operação primeiro.</div></div>`;
+    const ts=(db.transferencias||[]).filter(t=>t.jogoId===j.id);
+    return `<div class="page-head"><div><h2>Transferências · ${esc(j.adversario)}</h2><p>Mercadoria que muda de um bar para outro, com assinatura</p></div>
+      <button class="btn" onclick="formTransfer()">🔁 Nova transferência</button></div>
+    ${ts.length?[...ts].reverse().map(t=>`
+      <div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+        <div><b>${BARES[t.de].em} ${BARES[t.de].nome} → ${BARES[t.para].em} ${BARES[t.para].nome}</b>
+          <div style="font-size:.76rem;color:var(--text2)">${dtBR(t.dataHora)} · levou: ${esc(t.entregador)} · recebeu: ${esc(t.recebedor)}</div>
+          <div style="margin-top:6px;font-size:.85rem">${t.itens.map(i=>`<b>${NUM(i.qtd)}×</b> ${esc(prod(i.produtoId)?.nome||'?')}`).join(' · ')}</div></div>
+        <button class="btn ghost sm" onclick="relTransfer('${t.id}')">📄</button>
+      </div></div>`).join(''):'<div class="card"><div class="empty"><span class="ic">🔁</span>Nenhuma transferência neste jogo</div></div>'}`;
+  }
+};
+let trItens=[];
+function formTransfer(){
+  trItens=[];
+  const j=jogoAtivo();
+  abrirModal('Nova transferência',`
+    <div class="grid2">
+      <div><label>Sai do bar *</label><select id="tr_de" onchange="trItens=[];trAtualizaProds()">${Object.keys(BARES).map(b=>`<option value="${b}">${BARES[b].em} ${BARES[b].nome}</option>`).join('')}</select></div>
+      <div><label>Vai para o bar *</label><select id="tr_para">${Object.keys(BARES).map(b=>`<option value="${b}" ${b==='bangu'?'selected':''}>${BARES[b].em} ${BARES[b].nome}</option>`).join('')}</select></div>
+    </div>
+    <div style="background:var(--surface2);border:1px solid var(--line);border-radius:12px;padding:12px;margin-top:14px">
+      <div style="display:flex;gap:8px"><select id="tr_prod" style="flex:2"></select>
+      <input id="tr_qtd" type="number" placeholder="Qtd" style="flex:1" min="1"></div>
+      <button class="btn soft sm" style="margin-top:8px;width:100%" onclick="addItemTransfer()">＋ Adicionar item</button>
+      <div id="tr_lista" style="margin-top:8px"></div>
+    </div>
+    <div class="grid2"><div><label>Quem levou *</label><input id="tr_ent" value="${esc(sessao.nome)}"></div>
+    <div><label>Quem recebeu *</label><input id="tr_rec" placeholder="Nome de quem recebeu"></div></div>
+    ${sigHTML()}`,
+    `<button class="btn" onclick="salvarTransfer()">🔁 Confirmar transferência</button>`);
+  SigPad.montar('sigCanvas');
+  trAtualizaProds();
+}
+function trAtualizaProds(){
+  const j=jogoAtivo();const de=$('#tr_de').value;
+  const e=estoqueBar(de,j.id);
+  const usado={};trItens.forEach(i=>usado[i.produtoId]=(usado[i.produtoId]||0)+i.qtd);
+  const ops=db.produtos.filter(p=>p.ativo&&((e[p.id]||0)-(usado[p.id]||0))>0)
+    .map(p=>`<option value="${p.id}">${esc(p.nome)} (disp.: ${NUM((e[p.id]||0)-(usado[p.id]||0))})</option>`).join('');
+  $('#tr_prod').innerHTML=ops||'<option value="">— sem estoque neste bar —</option>';
+  $('#tr_lista').innerHTML=trItens.map((i,ix)=>`<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--line2);font-size:.86rem">
+    <span><b>${NUM(i.qtd)}×</b> ${esc(prod(i.produtoId).nome)}</span>
+    <button onclick="trItens.splice(${ix},1);trAtualizaProds()" style="color:var(--red);font-weight:700">✕</button></div>`).join('');
+}
+function addItemTransfer(){
+  const pid=$('#tr_prod').value;const q=+$('#tr_qtd').value;
+  if(!pid)return toast('Este bar não tem estoque para transferir','warn');
+  if(!q||q<=0)return toast('Informe a quantidade','warn');
+  const j=jogoAtivo();const e=estoqueBar($('#tr_de').value,j.id);
+  const usado=trItens.filter(i=>i.produtoId===pid).reduce((s,i)=>s+i.qtd,0);
+  if(q+usado>(e[pid]||0))return toast('Quantidade maior que o disponível','err');
+  trItens.push({produtoId:pid,qtd:q});$('#tr_qtd').value='';trAtualizaProds();
+}
+function salvarTransfer(){
+  const de=$('#tr_de').value,para=$('#tr_para').value;
+  const ent=$('#tr_ent').value.trim(),rec=$('#tr_rec').value.trim();
+  const ass=SigPad.dataURL();
+  if(de===para)return toast('Escolha bares diferentes','warn');
+  if(!trItens.length)return toast('Adicione ao menos um item','warn');
+  if(!ent||!rec)return toast('Informe quem levou e quem recebeu','warn');
+  if(!ass)return toast('Assinatura obrigatória','warn');
+  const j=jogoAtivo();const e=estoqueBar(de,j.id);
+  const soma={};trItens.forEach(i=>soma[i.produtoId]=(soma[i.produtoId]||0)+i.qtd);
+  for(const pid in soma)if(soma[pid]>(e[pid]||0))return toast('Estoque insuficiente de '+(prod(pid)?.nome||'?'),'err');
+  db.transferencias.push({id:'t-'+uid(),jogoId:j.id,de,para,itens:trItens,entregador:ent,recebedor:rec,assinatura:ass,dataHora:now(),updatedAt:now()});
+  audit('transferencia',`${BARES[de].nome} → ${BARES[para].nome} · ${trItens.length} itens`);
+  salvar();fecharModal();toast(`🔁 Transferido: ${BARES[de].nome} → ${BARES[para].nome}`,'ok');navegar('transfer');
+}
+function relTransfer(id){
+  const t=db.transferencias.find(x=>x.id===id);const j=jogoDe(t.jogoId);
+  imprimir('TRANSFERÊNCIA ENTRE BARES',`${cab(j)}
+    <p style="font-size:9pt"><b>${BARES[t.de].nome} → ${BARES[t.para].nome}</b> · ${dtBR(t.dataHora)}</p>
+    <table><tr><th>Produto</th><th>Quantidade</th></tr>
+    ${t.itens.map(i=>`<tr><td>${esc(prod(i.produtoId)?.nome||'?')}</td><td>${NUM(i.qtd)}</td></tr>`).join('')}</table>`,
+    [{nome:'Levou: '+t.entregador,img:t.assinatura},{nome:'Recebeu: '+t.recebedor,img:null}]);
+}
+
+/* =====================================================
    BUSCA POR VOZ
    ===================================================== */
 function buscaVoz(cb){
@@ -1593,7 +1691,7 @@ function buscaVoz(cb){
    Estratégia: cada registro é uma linha (id, tipo, dados,
    updated_at). Mescla por updatedAt — o mais recente vence.
    ===================================================== */
-const COLECOES=['usuarios','produtos','compras','jogos','romaneios','reposicoes','vendas','caixas','devolucoes','ajustes','excluidos'];
+const COLECOES=['usuarios','produtos','compras','jogos','romaneios','reposicoes','vendas','caixas','devolucoes','ajustes','transferencias','excluidos'];
 const Sync={
   status:'',ocupado:false,
   configurado(){return !!(db.config.supabaseUrl&&db.config.supabaseKey)},
