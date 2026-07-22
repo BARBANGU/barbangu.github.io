@@ -371,6 +371,20 @@ function estoqueBar(bar,jogoId){
   return e;
 }
 function jogoAtivo(){return db.jogos.find(j=>j.status==='em_andamento')||null}
+/* movimento completo de um bar: recebido × vendido × devolvido × transferido */
+function movimentoBar(bar,jogoId){
+  const m={};const g=pid=>m[pid]||(m[pid]={rec:0,vend:0,receita:0,dev:0,perd:0,tin:0,tout:0});
+  db.romaneios.filter(r=>r.bar===bar&&(!jogoId||r.jogoId===jogoId)&&r.status==='recebido').forEach(r=>r.itens.forEach(i=>g(i.produtoId).rec+=+i.qtdRecebida||0));
+  db.reposicoes.filter(r=>r.bar===bar&&(!jogoId||r.jogoId===jogoId)&&r.status==='entregue').forEach(r=>r.itens.forEach(i=>g(i.produtoId).rec+=+i.qtd||0));
+  (db.transferencias||[]).filter(t=>!jogoId||t.jogoId===jogoId).forEach(t=>{
+    if(t.para===bar)t.itens.forEach(i=>g(i.produtoId).tin+=+i.qtd||0);
+    if(t.de===bar)t.itens.forEach(i=>g(i.produtoId).tout+=+i.qtd||0);
+  });
+  db.vendas.filter(v=>v.bar===bar&&(!jogoId||v.jogoId===jogoId)).forEach(v=>v.itens.forEach(i=>{const x=g(i.produtoId);x.vend+=i.qtd;x.receita+=i.qtd*i.preco}));
+  db.devolucoes.filter(d=>d.bar===bar&&(!jogoId||d.jogoId===jogoId)).forEach(d=>d.itens.forEach(i=>{const x=g(i.produtoId);x.dev+=+i.qtdDevolvida||0;x.perd+=(+i.qtdPerdida||0)+(+i.qtdDanificada||0)}));
+  Object.values(m).forEach(x=>x.saldo=x.rec+x.tin-x.tout-x.vend-x.dev-x.perd);
+  return m;
+}
 function prod(id){return db.produtos.find(p=>p.id===id)}
 
 /* ---------- toast ---------- */
@@ -713,14 +727,22 @@ TELAS.estoque={titulo:'Estoque',
         ${sessao.perfil!=='caixa'?`<td><button class="btn ghost sm" onclick="ajusteEstoque('${p.id}')">Ajustar</button></td>`:''}</tr>`}).join('')}
       </tbody></table></div>`;
     }else{
-      const e=estoqueBar(abaEstoque,j?j.id:null);
-      const linhas=db.produtos.filter(p=>p.ativo&&(e[p.id]!==undefined)).map(p=>`<tr><td><b>${esc(p.nome)}</b></td><td class="num"><b>${NUM(e[p.id]||0)}</b> ${esc(p.unidade)}</td>
-        <td><span class="badge ${e[p.id]<=0?'b-red':e[p.id]<=5?'b-amber':'b-green'}">${e[p.id]<=0?'Zerado':e[p.id]<=5?'Baixo':'OK'}</span></td></tr>`).join('');
-      corpo=linhas?`<div class="table-wrap"><table><thead><tr><th>Produto</th><th class="num">Disponível ${j?'(jogo atual)':''}</th><th>Situação</th></tr></thead><tbody>${linhas}</tbody></table></div>`
+      const mov=movimentoBar(abaEstoque,j?j.id:null);
+      const pids=db.produtos.filter(p=>mov[p.id]);
+      let totV=0,totR=0;
+      const linhas=pids.map(p=>{const x=mov[p.id];totV+=x.vend;totR+=x.receita;
+        return `<tr><td><b>${esc(p.nome)}</b></td>
+        <td class="num">${NUM(x.rec+x.tin)}${x.tout?` <span style="color:var(--text3);font-size:.72rem">(−${NUM(x.tout)} transf.)</span>`:''}</td>
+        <td class="num"><b>${NUM(x.vend)}</b></td>
+        <td class="num" style="color:var(--green);font-weight:700">${BRL(x.receita)}</td>
+        <td class="num"><span class="badge ${x.saldo<=0?'b-red':x.saldo<=5?'b-amber':'b-green'}">${NUM(x.saldo)}</span></td></tr>`}).join('');
+      corpo=linhas?`<div class="table-wrap"><table><thead><tr><th>Produto</th><th class="num">Recebido</th><th class="num">Vendido</th><th class="num">Receita</th><th class="num">Disponível</th></tr></thead>
+        <tbody>${linhas}<tr style="background:var(--surface2)"><td><b>TOTAL</b></td><td></td><td class="num"><b>${NUM(totV)}</b></td><td class="num"><b>${BRL(totR)}</b></td><td></td></tr></tbody></table></div>`
         :`<div class="card"><div class="empty"><span class="ic">📦</span>Nenhuma carga recebida ${j?'neste jogo':''} para este bar.<br><small>Gere e receba um romaneio para abastecer.</small></div></div>`;
     }
     return `<div class="page-head"><div><h2>Controle de estoque</h2><p>${j?'Jogo em andamento: '+esc(j.adversario):'Sem jogo em andamento'}</p></div>
-      <button class="btn ghost sm" onclick="exportEstoqueCSV()">⬇ Excel</button></div>
+      <div style="display:flex;gap:8px"><button class="btn ghost sm" onclick="imprimirEstoque()">🖨 Imprimir</button>
+      <button class="btn ghost sm" onclick="exportEstoqueCSV()">⬇ Excel</button></div></div>
     <div class="tabs">${abas.map(([k,n])=>`<button class="${abaEstoque===k?'on':''}" onclick="abaEstoque='${k}';navegar('estoque')">${n}</button>`).join('')}</div>${corpo}`;
   }
 };
@@ -1402,6 +1424,23 @@ function relInventario(){
     ${db.produtos.map(p=>`<tr><td>${esc(p.codigo)}</td><td>${esc(p.nome)}</td><td>${esc(p.categoria)}</td><td>${BRL(p.custo)}</td><td>${BRL(p.preco)}</td><td>${NUM(p.estoqueMin)}</td><td>${NUM(p.estoqueCentral)}</td><td>${BRL(p.custo*p.estoqueCentral)}</td></tr>`).join('')}
     <tr><td colspan="7"><b>Valor total do estoque central</b></td><td><b>${BRL(db.produtos.reduce((s,p)=>s+p.custo*p.estoqueCentral,0))}</b></td></tr></table>`);
 }
+function imprimirEstoque(){
+  if(abaEstoque==='central')return relInventario();
+  const j=jogoAtivo();
+  relMovimentoBar(abaEstoque,j?j.id:null);
+}
+function relMovimentoBar(bar,jogoId){
+  const mov=movimentoBar(bar,jogoId);
+  const j=jogoId?jogoDe(jogoId):null;
+  const pids=db.produtos.filter(p=>mov[p.id]);
+  let tV=0,tR=0,tRec=0;
+  const linhas=pids.map(p=>{const x=mov[p.id];tV+=x.vend;tR+=x.receita;tRec+=x.rec+x.tin;
+    return `<tr><td>${esc(p.nome)}</td><td>${NUM(x.rec)}</td><td>${x.tin||x.tout?NUM(x.tin)+' / '+NUM(x.tout):'—'}</td><td>${NUM(x.vend)}</td><td>${BRL(x.receita)}</td><td>${NUM(x.dev)}</td><td>${NUM(x.perd)}</td><td><b>${NUM(x.saldo)}</b></td></tr>`}).join('');
+  imprimir('MOVIMENTO DO '+BARES[bar].nome.toUpperCase(),`${j?cab(j):'<p style="font-size:10pt"><b>Período:</b> toda a história</p>'}
+    <table><tr><th>Produto</th><th>Recebido</th><th>Transf. entra/sai</th><th>Vendido</th><th>Receita</th><th>Devolvido</th><th>Perdas</th><th>Saldo</th></tr>
+    ${linhas}
+    <tr><td><b>TOTAL</b></td><td><b>${NUM(tRec)}</b></td><td></td><td><b>${NUM(tV)}</b></td><td><b>${BRL(tR)}</b></td><td></td><td></td><td></td></tr></table>`);
+}
 function relHistoricoJogos(){
   const js=[...db.jogos].sort((a,b)=>(a.data||'').localeCompare(b.data||''));
   imprimir('HISTÓRICO DE JOGOS',`
@@ -1431,6 +1470,7 @@ TELAS.relatorios={titulo:'Relatórios',
       <div><b>Bangu × ${esc(j.adversario)}</b><div style="font-size:.76rem;color:var(--text2)">${dBR(j.data)} · ${esc(j.campeonato)}</div></div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button class="btn ghost sm" onclick="relFechamento('${j.id}')">Fechamento</button>
+        ${Object.keys(BARES).map(b=>`<button class="btn ghost sm" onclick="relMovimentoBar('${b}','${j.id}')">Consumo ${BARES[b].em}</button>`).join('')}
         ${db.romaneios.filter(r=>r.jogoId===j.id).map((r,i)=>`<button class="btn ghost sm" onclick="relRomaneio('${r.id}')">Romaneio ${BARES[r.bar].em}</button>`).join('')}
         ${db.caixas.filter(c=>c.jogoId===j.id&&c.fechado).map(c=>`<button class="btn ghost sm" onclick="relCaixa('${c.id}')">Caixa ${BARES[c.bar].em}</button>`).join('')}
       </div></div></div>`).join(''):'<div class="card"><div class="empty"><span class="ic">📄</span>Cadastre jogos para gerar relatórios</div></div>'}`;
