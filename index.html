@@ -330,7 +330,7 @@ function novoBanco(){
       p('TOR01','Torresmo','Torresmo',4.0,12,25,80,'porção'),
       p('BOL01','Bolo (consignado)','Bolo (consignado)',3.0,7,20,60,'fatia'),
     ],
-    compras:[], jogos:[], romaneios:[], reposicoes:[], vendas:[], caixas:[], devolucoes:[], ajustes:[], transferencias:[],
+    compras:[], jogos:[], romaneios:[], reposicoes:[], vendas:[], caixas:[], devolucoes:[], ajustes:[], transferencias:[], despesas:[],
     auditoria:[{id:uid(),quando:t,quem:'sistema',acao:'instalação',detalhe:'Banco de dados criado com dados iniciais'}],
     excluidos:[],
   };
@@ -344,6 +344,7 @@ function carregar(){
   if(raw){try{db=JSON.parse(raw)}catch(e){db=null}}
   if(!db)db=novoBanco();
   if(!db.transferencias)db.transferencias=[]; /* migração v1.1 */
+  if(!db.despesas)db.despesas=[];             /* migração v1.2 */
 }
 let saveT=null;
 function salvar(){
@@ -477,6 +478,7 @@ function menuDe(u){
     {r:'romaneio',ic:'🚚',nome:'Romaneio',perfis:['admin','almox','coord']},
     {r:'reposicao',ic:'🔄',nome:'Reposição',perfis:['admin','almox','coord']},
     {r:'transfer',ic:'🔁',nome:'Transferência',perfis:['admin','almox','coord']},
+    {r:'despesas',ic:'💸',nome:'Despesas',perfis:['admin','coord']},
     {r:'devolucao',ic:'↩️',nome:'Devolução',perfis:['admin','almox','coord']},
     {r:'relatorios',ic:'📄',nome:'Relatórios',perfis:['admin','coord']},
     {r:'indicadores',ic:'📈',nome:'Indicadores',perfis:['admin','coord']},
@@ -563,7 +565,9 @@ function statsJogo(jogoId){
     const min=Math.max(1,(Math.max(...ts)-Math.min(...ts))/60000);
     vpm=receita/min;
   }
-  return {vendas,receita,custo,lucro:receita-custo,itens,porPgto,porBar,porProduto,perdas,vpm,
+  const despesas=(db.despesas||[]).filter(d=>!jogoId||d.jogoId===jogoId).reduce((s,d)=>s+(+d.valor||0),0);
+  return {vendas,receita,custo,lucro:receita-custo,itens,porPgto,porBar,porProduto,perdas,vpm,despesas,
+    lucroLiquido:receita-custo-perdas-despesas,
     ticket:vendas.length?receita/vendas.length:0,cmv:receita?custo/receita:0,margem:receita?(receita-custo)/receita:0};
 }
 
@@ -593,6 +597,8 @@ TELAS.dashboard={titulo:'Dashboard',
       <div class="kpi"><div class="lbl">⏱️ Venda/minuto</div><div class="val">${BRL(s.vpm)}</div><div class="sub">ritmo da operação</div></div>
       <div class="kpi"><div class="lbl">🧮 CMV</div><div class="val">${PCT(s.cmv)}</div><div class="sub">custo ${BRL(s.custo)}</div></div>
       <div class="kpi"><div class="lbl">🗑️ Perdas</div><div class="val" style="color:var(--red)">${BRL(s.perdas)}</div><div class="sub">perdidos + danificados</div></div>
+      <div class="kpi"><div class="lbl">💸 Despesas</div><div class="val" style="color:var(--amber)">${BRL(s.despesas)}</div><div class="sub">custos operacionais</div></div>
+      <div class="kpi"><div class="lbl">✅ Lucro líquido</div><div class="val" style="color:var(--green)">${BRL(s.lucroLiquido)}</div><div class="sub">após perdas e despesas</div></div>
       ${publico?`<div class="kpi"><div class="lbl">👥 Consumo/torcedor</div><div class="val">${BRL(s.receita/publico)}</div><div class="sub">${NUM(publico)} previstos</div></div>`:''}
     </div>
     <div class="grid2" style="align-items:start">
@@ -1375,6 +1381,8 @@ function relFechamento(jogoId){
     <tr><td>Custo (CMV)</td><td>${BRL(s.custo)} (${PCT(s.cmv)})</td></tr>
     <tr><td>Lucro bruto</td><td>${BRL(s.lucro)} (margem ${PCT(s.margem)})</td></tr>
     <tr><td>Perdas e danos</td><td>${BRL(s.perdas)}</td></tr>
+    <tr><td>Despesas operacionais</td><td>${BRL(s.despesas)}</td></tr>
+    <tr><td><b>Lucro líquido</b></td><td><b>${BRL(s.lucroLiquido)}</b></td></tr>
     <tr><td>Nº de vendas / itens</td><td>${NUM(s.vendas.length)} vendas · ${NUM(s.itens)} itens</td></tr>
     <tr><td>Ticket médio</td><td>${BRL(s.ticket)}</td></tr>
     <tr><td>Consumo por torcedor</td><td>${pub?BRL(s.receita/pub):'—'} (público ${NUM(pub)})</td></tr>
@@ -1382,7 +1390,10 @@ function relFechamento(jogoId){
     <tr><td>Por bar (Social · Bangu · Visitante)</td><td>${BRL(s.porBar.social)} · ${BRL(s.porBar.bangu)} · ${BRL(s.porBar.visitante)}</td></tr></table>
     <p style="font-size:9pt;margin-top:8px"><b>Vendas por produto:</b></p>
     <table><tr><th>Produto</th><th>Qtd</th><th>Receita</th></tr>
-    ${top.map(([pid,d])=>`<tr><td>${esc(prod(pid)?.nome||'?')}</td><td>${NUM(d.qtd)}</td><td>${BRL(d.valor)}</td></tr>`).join('')}</table>`,
+    ${top.map(([pid,d])=>`<tr><td>${esc(prod(pid)?.nome||'?')}</td><td>${NUM(d.qtd)}</td><td>${BRL(d.valor)}</td></tr>`).join('')}</table>
+    ${(db.despesas||[]).filter(d=>d.jogoId===jogoId).length?`<p style="font-size:9pt;margin-top:8px"><b>Despesas operacionais:</b></p>
+    <table><tr><th>Categoria</th><th>Descrição</th><th>Valor</th><th>Responsável</th></tr>
+    ${db.despesas.filter(d=>d.jogoId===jogoId).map(d=>`<tr><td>${esc(d.categoria)}</td><td>${esc(d.descricao||'—')}</td><td>${BRL(d.valor)}</td><td>${esc(d.responsavel)}</td></tr>`).join('')}</table>`:''}`,
     [{nome:'Encerrado por: '+(j.encerradoPor||'____________'),img:j.assinaturaEncerramento}]);
 }
 function relInventario(){
@@ -1458,7 +1469,7 @@ TELAS.indicadores={titulo:'Indicadores',
     return `
     <div class="kpis">
       <div class="kpi hl"><div class="lbl">Receita acumulada</div><div class="val">${BRL(s.receita)}</div><div class="sub">${db.jogos.length} jogos cadastrados</div></div>
-      <div class="kpi"><div class="lbl">Lucro líquido</div><div class="val" style="color:var(--green)">${BRL(s.lucro-s.perdas)}</div><div class="sub">após perdas de ${BRL(s.perdas)}</div></div>
+      <div class="kpi"><div class="lbl">Lucro líquido</div><div class="val" style="color:var(--green)">${BRL(s.lucroLiquido)}</div><div class="sub">perdas ${BRL(s.perdas)} · despesas ${BRL(s.despesas)}</div></div>
       <div class="kpi"><div class="lbl">Margem</div><div class="val">${PCT(s.margem)}</div><div class="sub">CMV ${PCT(s.cmv)}</div></div>
       <div class="kpi"><div class="lbl">Ticket médio</div><div class="val">${BRL(s.ticket)}</div></div>
       <div class="kpi"><div class="lbl">Consumo por pessoa</div><div class="val">${pubTotal?BRL(s.receita/pubTotal):'—'}</div><div class="sub">${NUM(pubTotal)} torcedores</div></div>
@@ -1674,6 +1685,62 @@ function relTransfer(id){
 }
 
 /* =====================================================
+   TELA · DESPESAS OPERACIONAIS DO JOGO
+   ===================================================== */
+const CAT_DESPESAS=['Funcionários','Gelo','Transporte','Segurança','Limpeza','Aluguel de equipamento','Outros'];
+const DESP_EMOJI={'Funcionários':'👷','Gelo':'🧊','Transporte':'🚚','Segurança':'🦺','Limpeza':'🧹','Aluguel de equipamento':'🔌','Outros':'📌'};
+TELAS.despesas={titulo:'Despesas do jogo',
+  render(){
+    const j=jogoAtivo()||[...db.jogos].reverse().find(x=>x.status==='encerrado');
+    if(!j)return `<div class="card"><div class="empty"><span class="ic">💸</span>Cadastre um jogo para lançar despesas.</div></div>`;
+    const ds=(db.despesas||[]).filter(d=>d.jogoId===j.id);
+    const total=ds.reduce((s,d)=>s+(+d.valor||0),0);
+    const s=statsJogo(j.id);
+    const porCat={};ds.forEach(d=>porCat[d.categoria]=(porCat[d.categoria]||0)+(+d.valor||0));
+    return `<div class="page-head"><div><h2>Despesas · ${esc(j.adversario)}</h2><p>Custos operacionais: funcionários, gelo, extras…</p></div>
+      <button class="btn" onclick="formDespesa('${j.id}')">＋ Lançar despesa</button></div>
+    <div class="kpis">
+      <div class="kpi"><div class="lbl">💸 Total de despesas</div><div class="val" style="color:var(--amber)">${BRL(total)}</div><div class="sub">${ds.length} lançamento(s)</div></div>
+      <div class="kpi"><div class="lbl">💵 Receita do jogo</div><div class="val">${BRL(s.receita)}</div></div>
+      <div class="kpi hl"><div class="lbl">✅ Lucro líquido</div><div class="val">${BRL(s.lucroLiquido)}</div><div class="sub">receita − CMV − perdas − despesas</div></div>
+    </div>
+    ${Object.keys(porCat).length?`<div class="card"><h3>Por categoria</h3>
+      ${Object.entries(porCat).sort((a,b)=>b[1]-a[1]).map(([c,v])=>`<div class="hbar-row"><div class="nm">${DESP_EMOJI[c]||'📌'} ${esc(c)}</div><div class="hbar-track"><div class="hbar-fill" style="width:${Math.max(4,v/Math.max(...Object.values(porCat))*100)}%;background:var(--amber)"></div></div><div class="vl">${BRL(v)}</div></div>`).join('')}</div>`:''}
+    <div class="card" style="padding:6px 16px">
+    ${ds.length?[...ds].reverse().map(d=>`
+      <div class="list-row"><div class="prod-thumb">${DESP_EMOJI[d.categoria]||'📌'}</div>
+        <div style="flex:1"><b>${esc(d.descricao||d.categoria)}</b>
+          <div style="font-size:.76rem;color:var(--text2)">${esc(d.categoria)} · ${dtBR(d.dataHora)} · por ${esc(d.responsavel)}</div></div>
+        <b style="color:var(--amber)">${BRL(d.valor)}</b>
+        ${sessao.perfil==='admin'?`<button onclick="excluirDespesa('${d.id}')" style="color:var(--red);font-weight:700;padding:6px 10px">✕</button>`:''}
+      </div>`).join(''):'<div class="empty"><span class="ic">💸</span>Nenhuma despesa lançada neste jogo</div>'}
+    </div>`;
+  }
+};
+function formDespesa(jogoId){
+  abrirModal('Lançar despesa',`
+    <label>Categoria</label><select id="dp_cat">${CAT_DESPESAS.map(c=>`<option>${c}</option>`).join('')}</select>
+    <label>Descrição</label><input id="dp_desc" placeholder="Ex.: 4 diárias de caixa · 10 sacos de gelo">
+    <label>Valor total (R$) *</label><input id="dp_val" type="number" step="0.01" inputmode="decimal" placeholder="0,00">`,
+    `<button class="btn" onclick="salvarDespesa('${jogoId}')">Lançar despesa</button>`);
+}
+function salvarDespesa(jogoId){
+  const v=+$('#dp_val').value;
+  if(!v||v<=0)return toast('Informe o valor','warn');
+  db.despesas.push({id:'dp-'+uid(),jogoId,categoria:$('#dp_cat').value,descricao:$('#dp_desc').value.trim(),valor:v,responsavel:sessao.nome,dataHora:now(),updatedAt:now()});
+  audit('despesa.lancar',`${$('#dp_cat').value} · ${BRL(v)}`);
+  salvar();fecharModal();toast('Despesa lançada','ok');navegar('despesas');
+}
+function excluirDespesa(id){
+  const d=db.despesas.find(x=>x.id===id);
+  if(!confirm(`Excluir a despesa "${d.descricao||d.categoria}" de ${BRL(d.valor)}?`))return;
+  db.excluidos.push({tipo:'despesas',id,quando:now()});
+  db.despesas=db.despesas.filter(x=>x.id!==id);
+  audit('despesa.excluir',`${d.categoria} · ${BRL(d.valor)}`);
+  salvar();toast('Despesa excluída');navegar('despesas');
+}
+
+/* =====================================================
    BUSCA POR VOZ
    ===================================================== */
 function buscaVoz(cb){
@@ -1691,7 +1758,7 @@ function buscaVoz(cb){
    Estratégia: cada registro é uma linha (id, tipo, dados,
    updated_at). Mescla por updatedAt — o mais recente vence.
    ===================================================== */
-const COLECOES=['usuarios','produtos','compras','jogos','romaneios','reposicoes','vendas','caixas','devolucoes','ajustes','transferencias','excluidos'];
+const COLECOES=['usuarios','produtos','compras','jogos','romaneios','reposicoes','vendas','caixas','devolucoes','ajustes','transferencias','despesas','excluidos'];
 const Sync={
   status:'',ocupado:false,
   configurado(){return !!(db.config.supabaseUrl&&db.config.supabaseKey)},
