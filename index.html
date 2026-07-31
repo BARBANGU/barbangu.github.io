@@ -343,6 +343,7 @@ function novoBanco(){
       p('BOL01','Bolo (consignado)','Bolo (consignado)',3.0,7,20,60,'fatia'),
     ],
     bares:BARES_PADRAO.map(b=>({...b,updatedAt:t})),
+    listaCompras:[],
     compras:[], jogos:[], romaneios:[], reposicoes:[], vendas:[], caixas:[], devolucoes:[], ajustes:[], transferencias:[], despesas:[],
     auditoria:[{id:uid(),quando:t,quem:'sistema',acao:'instalação',detalhe:'Banco de dados criado com dados iniciais'}],
     excluidos:[],
@@ -359,6 +360,7 @@ function carregar(){
   if(!db.transferencias)db.transferencias=[]; /* migração v1.1 */
   if(!db.despesas)db.despesas=[];             /* migração v1.2 */
   if(!db.bares)db.bares=BARES_PADRAO.map(b=>({...b,updatedAt:now()})); /* migração v1.3 */
+  if(!db.listaCompras)db.listaCompras=[];                              /* migração v1.4 */
   recarregarBares();
 }
 let saveT=null;
@@ -789,10 +791,57 @@ function exportEstoqueCSV(){
 /* =====================================================
    TELA · COMPRAS (Módulo 2)
    ===================================================== */
+function addListaCompras(pid,qtd,origem){
+  const ex=(db.listaCompras||[]).find(i=>i.produtoId===pid);
+  if(ex){ex.qtd+=qtd;ex.origem=origem;ex.updatedAt=now()}
+  else db.listaCompras.push({id:'lc-'+uid(),produtoId:pid,qtd,origem:origem||'manual',updatedAt:now()});
+}
+function updListaQtd(id,v){const i=db.listaCompras.find(x=>x.id===id);if(i){i.qtd=+v||0;i.updatedAt=now();salvar()}}
+function removeListaItem(id){db.excluidos.push({tipo:'listaCompras',id,quando:now()});db.listaCompras=db.listaCompras.filter(x=>x.id!==id);salvar();navegar('compras')}
+function addListaManual(){
+  const pid=$('#lc_prod').value,q=+$('#lc_qtd').value;
+  if(!q||q<=0)return toast('Informe a quantidade','warn');
+  addListaCompras(pid,q,'manual');salvar();navegar('compras');
+}
+function relListaCompras(){
+  const lc=db.listaCompras||[];let tot=0;
+  imprimir('LISTA DE COMPRAS',`
+    <table><tr><th>Produto</th><th>Fornecedor</th><th>Quantidade</th><th>Custo unit. (últ.)</th><th>Estimativa</th><th>Origem</th></tr>
+    ${lc.map(i=>{const p=prod(i.produtoId);const est=(p?.custo||0)*i.qtd;tot+=est;
+      return `<tr><td>${esc(p?.nome||'?')}</td><td>${esc(p?.fornecedor||'—')}</td><td>${NUM(i.qtd)} ${esc(p?.unidade||'')}</td><td>${BRL(p?.custo||0)}</td><td>${BRL(est)}</td><td>${esc(i.origem)}</td></tr>`}).join('')}
+    <tr><td colspan="4"><b>TOTAL ESTIMADO</b></td><td><b>${BRL(tot)}</b></td><td></td></tr></table>`);
+}
+function lancarCompraDaLista(){
+  window._compraDaLista=(db.listaCompras||[]).map(i=>i.produtoId);
+  formCompra((db.listaCompras||[]).map(i=>({produtoId:i.produtoId,qtd:i.qtd,custoUnit:prod(i.produtoId)?.custo||0})));
+}
 TELAS.compras={titulo:'Compras',
   render(){
+    const lc=db.listaCompras||[];
+    const totEst=lc.reduce((s,i)=>s+(prod(i.produtoId)?.custo||0)*i.qtd,0);
     return `<div class="page-head"><div><h2>Entradas de mercadoria</h2><p>${db.compras.length} lançamentos</p></div>
       <button class="btn" onclick="formCompra()">＋ Lançar compra</button></div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <h3 style="margin:0">🛒 Lista de compras ${lc.length?`<span class="badge b-amber">${lc.length} itens · ~${BRL(totEst)}</span>`:''}</h3>
+        ${lc.length?`<div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn ghost sm" onclick="relListaCompras()">🖨</button>
+          <button class="btn ghost sm" onclick="baixarCSV('lista_compras.csv',[['Produto','Fornecedor','Qtd','CustoUnit','Estimativa','Origem'],...db.listaCompras.map(i=>{const p=prod(i.produtoId);return[p?.nome||'?',p?.fornecedor||'',i.qtd,p?.custo||0,(p?.custo||0)*i.qtd,i.origem]})])">⬇</button>
+          <button class="btn green sm" onclick="lancarCompraDaLista()">🧾 Lançar como compra</button></div>`:''}
+      </div>
+      ${lc.length?`<div style="margin-top:8px">${lc.map(i=>{const p=prod(i.produtoId);return `
+        <div class="list-row"><div class="prod-thumb">${p?(CAT_EMOJI[p.categoria]||'📦'):'?'}</div>
+          <div style="flex:1"><b>${esc(p?.nome||'?')}</b><div style="font-size:.74rem;color:var(--text2)">${esc(i.origem)} · custo ${BRL(p?.custo||0)}</div></div>
+          <input type="number" value="${i.qtd}" min="0" onchange="updListaQtd('${i.id}',this.value)" style="width:86px;padding:8px;text-align:center">
+          <button onclick="removeListaItem('${i.id}')" style="color:var(--red);font-weight:700;padding:6px 10px">✕</button>
+        </div>`}).join('')}</div>`
+      :`<p style="color:var(--text2);font-size:.83rem;margin-top:6px">Vazia. Ela é preenchida automaticamente quando um romaneio pede mais do que há no estoque, pela Sugestão de compra do jogo, ou manualmente aqui embaixo.</p>`}
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <select id="lc_prod" style="flex:2">${db.produtos.filter(p=>p.ativo).map(p=>`<option value="${p.id}">${esc(p.nome)}</option>`).join('')}</select>
+        <input id="lc_qtd" type="number" placeholder="Qtd" style="flex:1" min="1">
+        <button class="btn soft sm" onclick="addListaManual()">＋</button>
+      </div>
+    </div>
     <div class="card" style="padding:6px 16px">
     ${db.compras.length?[...db.compras].reverse().map(c=>`
       <div class="list-row"><div class="prod-thumb">🧾</div>
@@ -802,8 +851,8 @@ TELAS.compras={titulo:'Compras',
   }
 };
 let compraItens=[];
-function formCompra(){
-  compraItens=[];
+function formCompra(prefill){
+  compraItens=Array.isArray(prefill)?prefill.filter(i=>i.qtd>0):[];
   abrirModal('Lançar compra',`
     <div class="grid2"><div><label>Fornecedor *</label><input id="c_forn" placeholder="Nome do fornecedor"></div>
     <div><label>Data</label><input id="c_data" type="date" value="${new Date().toISOString().slice(0,10)}"></div></div>
@@ -819,6 +868,7 @@ function formCompra(){
       <div id="c_lista" style="margin-top:8px"></div>
     </div>`,
     `<button class="btn" onclick="salvarCompra()">Registrar compra</button>`);
+  if(compraItens.length)renderItensCompra();
 }
 function addItemCompra(){
   const pid=$('#c_prod').value,q=+$('#c_qtd').value,cu=+$('#c_cu').value;
@@ -840,6 +890,12 @@ function salvarCompra(){
   db.compras.push({id:uid(),fornecedor:forn,data:$('#c_data').value,nf:$('#c_nf').value.trim(),itens:compraItens,valor,responsavel:sessao.nome,updatedAt:now()});
   compraItens.forEach(i=>{const p=prod(i.produtoId);p.estoqueCentral+=i.qtd;if(i.custoUnit)p.custo=i.custoUnit;p.updatedAt=now()});
   audit('compra.lancar',`${forn} · ${BRL(valor)}`);
+  if(window._compraDaLista){
+    const ids=new Set(compraItens.map(i=>i.produtoId));
+    db.listaCompras.filter(i=>ids.has(i.produtoId)).forEach(i=>db.excluidos.push({tipo:'listaCompras',id:i.id,quando:now()}));
+    db.listaCompras=db.listaCompras.filter(i=>!ids.has(i.produtoId));
+    window._compraDaLista=null;
+  }
   salvar();fecharModal();toast('Compra registrada e estoque atualizado','ok');navegar('compras');
 }
 </script>
@@ -945,8 +1001,15 @@ function sugestaoCompra(jogoId){
       <td class="num">${NUM(l.sugerido)}</td><td class="num">${NUM(l.p.estoqueCentral)}</td>
       <td class="num"><b style="color:${l.comprar>0?'var(--red)':'var(--green)'}">${l.comprar>0?NUM(l.comprar):'✓ ok'}</b></td></tr>`).join('')}
     </tbody></table></div>`,
-    `<button class="btn ghost" onclick="exportSugestaoCSV('${jogoId}')">⬇ Excel</button><button class="btn" onclick="fecharModal()">Fechar</button>`);
+    `<button class="btn ghost" onclick="exportSugestaoCSV('${jogoId}')">⬇ Excel</button><button class="btn" onclick="sugestaoParaLista()">🛒 Enviar p/ lista</button>`);
   window._sug={jogo:j,linhas};
+}
+function sugestaoParaLista(){
+  const {jogo,linhas}=window._sug;let n=0;
+  linhas.filter(l=>l.comprar>0).forEach(l=>{addListaCompras(l.p.id,l.comprar,'Sugestão · '+jogo.adversario);n++});
+  salvar();fecharModal();
+  toast(n?`${n} item(ns) enviados para a 🛒 Lista de Compras`:'Estoque já cobre tudo 🎉',n?'ok':'');
+  if(n)navegar('compras');
 }
 function exportSugestaoCSV(){
   const {jogo,linhas}=window._sug;
@@ -987,15 +1050,15 @@ function gerarRomaneio(bar){
   /* pré-preenche com sugestão proporcional ao setor */
   const pubSetor=+j.publicoPrev[bar]||0;
   const pubTotal=pubDe(j)||1;
-  romItens=db.produtos.filter(p=>p.ativo&&p.estoqueCentral>0).map(p=>{
-    const sug=Math.min(p.estoqueCentral,Math.ceil(p.estoqueCentral*(pubSetor/pubTotal)));
+  romItens=db.produtos.filter(p=>p.ativo).map(p=>{
+    const sug=Math.max(0,Math.ceil(Math.max(0,p.estoqueCentral)*(pubSetor/pubTotal)));
     return {produtoId:p.id,qtd:sug};
   });
   abrirModal(`Gerar carga · ${BARES[bar].nome}`,`
-    <p style="color:var(--text2);font-size:.85rem">Quantidades pré-calculadas pela proporção de público do setor (${NUM(pubSetor)} de ${NUM(pubTotal)}). Ajuste antes de enviar.</p>
+    <p style="color:var(--text2);font-size:.85rem">Quantidades pré-calculadas pela proporção de público do setor (${NUM(pubSetor)} de ${NUM(pubTotal)}). Ajuste à vontade — <b>pode enviar mais do que há no estoque</b>: o que faltar entra automaticamente na 🛒 Lista de Compras.</p>
     <div class="table-wrap" style="margin-top:10px"><table><thead><tr><th>Produto</th><th class="num">Estoque</th><th style="width:110px">Enviar</th></tr></thead><tbody>
-    ${romItens.map((i,ix)=>{const p=prod(i.produtoId);return `<tr><td>${esc(p.nome)}</td><td class="num">${NUM(p.estoqueCentral)}</td>
-      <td><input type="number" id="rom_${ix}" value="${i.qtd}" min="0" max="${p.estoqueCentral}" style="padding:8px;text-align:center"></td></tr>`}).join('')}
+    ${romItens.map((i,ix)=>{const p=prod(i.produtoId);return `<tr><td>${esc(p.nome)}</td><td class="num" style="${p.estoqueCentral<=0?'color:var(--red);font-weight:700':''}">${NUM(p.estoqueCentral)}</td>
+      <td><input type="number" id="rom_${ix}" value="${i.qtd}" min="0" style="padding:8px;text-align:center"></td></tr>`}).join('')}
     </tbody></table></div>
     ${sigHTML()}`,
     `<button class="btn" onclick="salvarRomaneio('${bar}')">🚚 Enviar carga</button>`);
@@ -1007,12 +1070,18 @@ function salvarRomaneio(bar){
   const j=jogoAtivo();
   const itens=romItens.map((i,ix)=>({produtoId:i.produtoId,qtdEnviada:+$('#rom_'+ix).value||0,qtdRecebida:0})).filter(i=>i.qtdEnviada>0);
   if(!itens.length)return toast('Nenhuma quantidade informada','warn');
-  for(const i of itens){const p=prod(i.produtoId);if(i.qtdEnviada>p.estoqueCentral)return toast(`Estoque insuficiente de ${p.nome}`,'err')}
+  /* faltas viram lista de compras — o romaneio pode ser feito mesmo sem a carga toda */
+  const faltas=[];
+  itens.forEach(i=>{const p=prod(i.produtoId);const falta=i.qtdEnviada-p.estoqueCentral;if(falta>0)faltas.push({produtoId:i.produtoId,qtd:falta})});
   itens.forEach(i=>{const p=prod(i.produtoId);p.estoqueCentral-=i.qtdEnviada;p.updatedAt=now()});
+  faltas.forEach(f=>addListaCompras(f.produtoId,f.qtd,'Romaneio '+barNome(bar)));
   db.romaneios.push({id:'r-'+uid(),jogoId:j.id,bar,itens,status:'enviado',assinaturaEnvio:ass,assinaturaRecebimento:null,
     dataHora:now(),responsavelEnvio:sessao.nome,responsavelRecebimento:null,updatedAt:now()});
   audit('romaneio.enviar',`${BARES[bar].nome} · ${itens.length} itens`);
-  salvar();fecharModal();toast('Carga enviada para '+BARES[bar].nome,'ok');navegar('romaneio');
+  salvar();fecharModal();
+  if(faltas.length)toast(`⚠️ ${faltas.length} item(ns) sem estoque suficiente foram para a 🛒 Lista de Compras (em Compras)`,'warn');
+  else toast('Carga enviada para '+BARES[bar].nome,'ok');
+  navegar('romaneio');
 }
 function receberRomaneio(id){
   const r=db.romaneios.find(x=>x.id===id);
@@ -1897,7 +1966,7 @@ function buscaVoz(cb){
    Estratégia: cada registro é uma linha (id, tipo, dados,
    updated_at). Mescla por updatedAt — o mais recente vence.
    ===================================================== */
-const COLECOES=['bares','usuarios','produtos','compras','jogos','romaneios','reposicoes','vendas','caixas','devolucoes','ajustes','transferencias','despesas','excluidos'];
+const COLECOES=['bares','usuarios','produtos','compras','jogos','romaneios','reposicoes','vendas','caixas','devolucoes','ajustes','transferencias','despesas','listaCompras','excluidos'];
 const Sync={
   status:'',ocupado:false,
   configurado(){return !!(db.config.supabaseUrl&&db.config.supabaseKey)},
