@@ -244,6 +244,7 @@ tr:last-child td{border-bottom:none}
     <div class="login-logo">B</div>
     <h1>Bangu 2030</h1>
     <p>Gestão de Bares · Estádio Moça Bonita</p>
+    <p style="opacity:.55;font-size:.72rem;margin-top:6px" id="verTag"></p>
   </div>
   <div class="login-card" id="loginCard"></div>
 </div>
@@ -270,6 +271,7 @@ tr:last-child td{border-bottom:none}
    Arquitetura: SPA offline-first + sincronização opcional
    ===================================================== */
 'use strict';
+const APP_VERSAO='1.6';
 
 /* ---------- utilidades ---------- */
 const $=s=>document.querySelector(s);
@@ -1770,7 +1772,7 @@ TELAS.config={titulo:'Ajustes',
         <label class="btn ghost" style="cursor:pointer">⬆ Restaurar<input type="file" accept=".json" style="display:none" onchange="importarBackup(this)"></label>
       </div></div>
     <div class="card"><h3>ℹ️ Sobre</h3>
-      <p style="font-size:.84rem;color:var(--text2)">Bangu 2030 · Gestão de Bares · v1.0<br>
+      <p style="font-size:.84rem;color:var(--text2)">Bangu 2030 · Gestão de Bares · versão ${APP_VERSAO}<br>
       PWA offline-first · ${db.produtos.length} produtos · ${db.vendas.length} vendas registradas<br>
       Instale na tela inicial: no navegador, use "Adicionar à tela de início".</p></div>`;
   }
@@ -2022,6 +2024,7 @@ const Sync={
 carregar();
 document.documentElement.dataset.theme=db.config.tema||'light';
 renderLogin();
+{const v=$('#verTag');if(v)v.textContent='versão '+APP_VERSAO;}
 window.addEventListener('online',()=>{if(db.config.syncAuto&&Sync.configurado())Sync.sincronizar(true)});
 if('serviceWorker' in navigator&&location.protocol.startsWith('http')){
   navigator.serviceWorker.register('sw.js').catch(()=>{});
