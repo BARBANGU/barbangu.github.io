@@ -271,7 +271,7 @@ tr:last-child td{border-bottom:none}
    Arquitetura: SPA offline-first + sincronização opcional
    ===================================================== */
 'use strict';
-const APP_VERSAO='1.6';
+const APP_VERSAO='1.7';
 
 /* ---------- utilidades ---------- */
 const $=s=>document.querySelector(s);
@@ -814,8 +814,13 @@ function relListaCompras(){
     <tr><td colspan="4"><b>TOTAL ESTIMADO</b></td><td><b>${BRL(tot)}</b></td><td></td></tr></table>`);
 }
 function lancarCompraDaLista(){
-  window._compraDaLista=(db.listaCompras||[]).map(i=>i.produtoId);
+  window._compraDaLista=true;
   formCompra((db.listaCompras||[]).map(i=>({produtoId:i.produtoId,qtd:i.qtd,custoUnit:prod(i.produtoId)?.custo||0})));
+}
+function lancarItemDaLista(id){
+  const i=db.listaCompras.find(x=>x.id===id);if(!i)return;
+  window._compraDaLista=true;
+  formCompra([{produtoId:i.produtoId,qtd:i.qtd,custoUnit:prod(i.produtoId)?.custo||0}]);
 }
 TELAS.compras={titulo:'Compras',
   render(){
@@ -835,6 +840,7 @@ TELAS.compras={titulo:'Compras',
         <div class="list-row"><div class="prod-thumb">${p?(CAT_EMOJI[p.categoria]||'📦'):'?'}</div>
           <div style="flex:1"><b>${esc(p?.nome||'?')}</b><div style="font-size:.74rem;color:var(--text2)">${esc(i.origem)} · custo ${BRL(p?.custo||0)}</div></div>
           <input type="number" value="${i.qtd}" min="0" onchange="updListaQtd('${i.id}',this.value)" style="width:86px;padding:8px;text-align:center">
+          <button class="btn ghost sm" onclick="lancarItemDaLista('${i.id}')" title="Lançar compra só deste item">🧾</button>
           <button onclick="removeListaItem('${i.id}')" style="color:var(--red);font-weight:700;padding:6px 10px">✕</button>
         </div>`}).join('')}</div>`
       :`<p style="color:var(--text2);font-size:.83rem;margin-top:6px">Vazia. Ela é preenchida automaticamente quando um romaneio pede mais do que há no estoque, pela Sugestão de compra do jogo, ou manualmente aqui embaixo.</p>`}
@@ -879,23 +885,33 @@ function addItemCompra(){
   $('#c_qtd').value='';$('#c_cu').value='';renderItensCompra();
 }
 function renderItensCompra(){
-  $('#c_lista').innerHTML=compraItens.map((i,ix)=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--line2);font-size:.86rem">
-    <span><b>${esc(prod(i.produtoId).nome)}</b> · ${NUM(i.qtd)} × ${BRL(i.custoUnit)}</span>
-    <span><b>${BRL(i.qtd*i.custoUnit)}</b> <button onclick="compraItens.splice(${ix},1);renderItensCompra()" style="color:var(--red);font-weight:700;padding:4px 8px">✕</button></span></div>`).join('')
+  $('#c_lista').innerHTML=(compraItens.length?`<div style="display:flex;gap:6px;font-size:.68rem;color:var(--text2);font-weight:700;padding:6px 0 2px"><span style="flex:1">PRODUTO</span><span style="width:74px;text-align:center">QTD</span><span style="width:86px;text-align:center">R$ UNIT.</span><span style="width:80px;text-align:right">TOTAL</span><span style="width:32px"></span></div>`:'')
+    +compraItens.map((i,ix)=>{const p=prod(i.produtoId);return `<div style="display:flex;align-items:center;gap:6px;padding:6px 0;border-bottom:1px solid var(--line2);font-size:.85rem">
+    <b style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">${esc(p?.nome||'?')}</b>
+    <input type="number" value="${i.qtd}" min="0" style="width:74px;padding:7px 4px;text-align:center" onchange="compraItens[${ix}].qtd=+this.value||0;renderItensCompra()">
+    <input type="number" step="0.01" value="${i.custoUnit}" min="0" style="width:86px;padding:7px 4px;text-align:center" onchange="compraItens[${ix}].custoUnit=+this.value||0;renderItensCompra()">
+    <b style="width:80px;text-align:right">${BRL(i.qtd*i.custoUnit)}</b>
+    <button onclick="compraItens.splice(${ix},1);renderItensCompra()" style="color:var(--red);font-weight:700;padding:4px 8px;width:32px">✕</button>
+  </div>`}).join('')
     +(compraItens.length?`<div style="text-align:right;padding-top:8px"><b>Total: ${BRL(compraItens.reduce((s,i)=>s+i.qtd*i.custoUnit,0))}</b></div>`:'');
 }
 function salvarCompra(){
   const forn=$('#c_forn').value.trim();
   if(!forn)return toast('Informe o fornecedor','warn');
+  compraItens=compraItens.filter(i=>i.qtd>0);
   if(!compraItens.length)return toast('Adicione ao menos um item','warn');
   const valor=compraItens.reduce((s,i)=>s+i.qtd*i.custoUnit,0);
   db.compras.push({id:uid(),fornecedor:forn,data:$('#c_data').value,nf:$('#c_nf').value.trim(),itens:compraItens,valor,responsavel:sessao.nome,updatedAt:now()});
   compraItens.forEach(i=>{const p=prod(i.produtoId);p.estoqueCentral+=i.qtd;if(i.custoUnit)p.custo=i.custoUnit;p.updatedAt=now()});
   audit('compra.lancar',`${forn} · ${BRL(valor)}`);
   if(window._compraDaLista){
-    const ids=new Set(compraItens.map(i=>i.produtoId));
-    db.listaCompras.filter(i=>ids.has(i.produtoId)).forEach(i=>db.excluidos.push({tipo:'listaCompras',id:i.id,quando:now()}));
-    db.listaCompras=db.listaCompras.filter(i=>!ids.has(i.produtoId));
+    /* abate da lista só o que foi comprado; o restante permanece */
+    compraItens.forEach(ci=>{
+      const li=db.listaCompras.find(x=>x.produtoId===ci.produtoId);
+      if(!li)return;
+      li.qtd-=ci.qtd;li.updatedAt=now();
+      if(li.qtd<=0){db.excluidos.push({tipo:'listaCompras',id:li.id,quando:now()});db.listaCompras=db.listaCompras.filter(x=>x.id!==li.id);}
+    });
     window._compraDaLista=null;
   }
   salvar();fecharModal();toast('Compra registrada e estoque atualizado','ok');navegar('compras');
